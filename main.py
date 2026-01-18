@@ -1,4 +1,4 @@
-# main.py (VERSÃO PROFISSIONAL - TRATAMENTO COMPLETO)
+# main.py (CORRIGIDO - FORMATO CORRETO)
 
 import base64
 from pathlib import Path
@@ -9,12 +9,12 @@ from requests_pkcs12 import Pkcs12Adapter
 from zeep import Client
 from zeep.exceptions import Fault
 from zeep.transports import Transport
+from zeep.wsse.utils import WSU
 
 import config
 
 NS = "http://www.portalfiscal.inf.br/nfe"
 
-# 5️⃣ Mapeamento de status SEFAZ
 STATUS_MAP = {
     "137": "Nenhum documento disponível",
     "138": "Documentos localizados",
@@ -26,7 +26,6 @@ STATUS_MAP = {
 }
 
 
-# 2️⃣ Extração defensiva de status
 def extrair_status(resposta):
     """Extrai cStat e xMotivo de forma segura"""
     if resposta is None:
@@ -45,16 +44,21 @@ def extrair_status(resposta):
         return None, f"Erro ao interpretar resposta: {e}"
 
 
-# 4️⃣ Salvar XML bruto para análise
-def salvar_xml_erro(client):
+def salvar_xml_erro(client, nome_arquivo="erro_sefaz.xml"):
     """Salva XML bruto da resposta em caso de erro"""
     try:
         raw_xml = client.transport.session.last_response.content
-        erro_xml = Path("erro_sefaz.xml")
+        erro_xml = Path(nome_arquivo)
         erro_xml.write_bytes(raw_xml)
         print(f"🧪 XML bruto salvo para análise: {erro_xml.resolve()}")
-    except Exception:
-        pass
+
+        # Mostrar o XML também
+        print("\n📄 XML da Resposta:")
+        print(raw_xml.decode("utf-8")[:2000])  # Primeiros 2000 chars
+        print("...")
+
+    except Exception as e:
+        print(f"⚠️ Não foi possível salvar XML de erro: {e}")
 
 
 def main():
@@ -69,7 +73,6 @@ def main():
 
     print(f"📁 XMLs serão salvos em: {PASTA_XML.resolve()}")
 
-    # Sessão HTTPS com certificado A1
     session = Session()
     session.mount(
         "https://",
@@ -84,7 +87,6 @@ def main():
         transport=Transport(session=session),
     )
 
-    # Controle de ultNSU persistido
     if ARQ_ULT_NSU.exists():
         nsu = ARQ_ULT_NSU.read_text().strip()
     else:
@@ -98,31 +100,29 @@ def main():
         print(f"🔍 Consultando NSU: {nsu}")
 
         try:
-            # Criar SOAP Header
-            header_element = etree.Element(
-                "{http://www.portalfiscal.inf.br/nfe}nfeCabecMsg", nsmap={"nfe": "http://www.portalfiscal.inf.br/nfe"}
-            )
+            # ✅ CRIAR HEADER COM NAMESPACE CORRETO
+            header_element = etree.Element("{http://www.portalfiscal.inf.br/nfe}nfeCabecMsg")
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}cUF").text = "23"
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}versaoDados").text = "1.01"
 
-            # Criar SOAP Body
-            distDFeInt = etree.Element("distDFeInt", versao="1.01", xmlns=NS)
-            etree.SubElement(distDFeInt, "tpAmb").text = "1"
-            etree.SubElement(distDFeInt, "CNPJ").text = CNPJ_INTERESSADO
-            distNSU = etree.SubElement(distDFeInt, "distNSU")
-            etree.SubElement(distNSU, "ultNSU").text = nsu
+            # ✅ CRIAR BODY - ELEMENTO XML PURO
+            distDFeInt = etree.Element("{http://www.portalfiscal.inf.br/nfe}distDFeInt", versao="1.01")
+            etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}tpAmb").text = "1"
+            etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}CNPJ").text = CNPJ_INTERESSADO
 
-            # 3️⃣ Captura explícita de SOAP Fault
+            distNSU = etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}distNSU")
+            etree.SubElement(distNSU, "{http://www.portalfiscal.inf.br/nfe}ultNSU").text = nsu
+
+            # ✅ CHAMAR SERVIÇO COM ELEMENTO XML DIRETO
             response = client.service.nfeDistDFeInteresse(
-                nfeDadosMsg={"_value_1": distDFeInt},
-                _soapheaders=[header_element],
+                nfeDadosMsg=distDFeInt, _soapheaders=[header_element]  # XML Element direto
             )
 
         except Fault as fault:
             print("❌ SOAP Fault retornado pela SEFAZ")
             print(f"Fault code: {fault.code}")
             print(f"Fault message: {fault.message}")
-            salvar_xml_erro(client)
+            salvar_xml_erro(client, "fault_sefaz.xml")
             break
 
         except Exception as e:
@@ -130,33 +130,33 @@ def main():
             import traceback
 
             traceback.print_exc()
-            salvar_xml_erro(client)
+            salvar_xml_erro(client, "exception_sefaz.xml")
             break
 
-        # 1️⃣ Detectar resposta vazia
         if response is None:
             print("❌ Resposta SOAP vazia (None).")
             print("➡️ Possível erro de schema, rejeição grave ou falha de comunicação.")
-            salvar_xml_erro(client)
+            salvar_xml_erro(client, "none_response.xml")
             break
 
-        # 2️⃣ Extração defensiva de status
+        # DEBUG: Ver estrutura da resposta
+        print(f"\n🔬 Tipo da resposta: {type(response)}")
+        print(f"🔬 Atributos disponíveis: {[a for a in dir(response) if not a.startswith('_')]}")
+
         cStat, xMotivo = extrair_status(response)
 
         print(f"📄 Retorno SEFAZ: {cStat} - {xMotivo}")
 
         if cStat is None:
             print("❌ Não foi possível interpretar o retorno da SEFAZ.")
-            salvar_xml_erro(client)
+            salvar_xml_erro(client, "no_cstat.xml")
             break
 
-        # 5️⃣ Tratamento explícito de status
         if cStat in STATUS_MAP:
             print(f"ℹ️ {STATUS_MAP[cStat]}")
         else:
             print(f"⚠️ Status desconhecido retornado pela SEFAZ: {cStat}")
 
-        # Tratamento de status específicos
         if cStat == "137":
             break
 
@@ -166,10 +166,9 @@ def main():
 
         if cStat != "138":
             print("❌ Rejeição SEFAZ.")
-            salvar_xml_erro(client)
+            salvar_xml_erro(client, f"rejeicao_{cStat}.xml")
             break
 
-        # Processar documentos
         lote = getattr(response, "loteDistDFeInt", None)
         docs = getattr(lote, "docZip", []) if lote else []
 
