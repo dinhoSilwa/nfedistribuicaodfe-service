@@ -4,11 +4,17 @@ import gzip
 import time
 from pathlib import Path
 import requests
+import urllib3
+import ssl
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.ssl_ import create_urllib3_context
 from lxml import etree
 from signxml import XMLSigner, methods
-from config import CERT_PFX_PATH, CERT_PASSWORD
 
-# URLs oficiais SEM espaços no final
+# Desativa avisos de SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# URLs oficiais do serviço NFeDistribuicaoDFe (produção)
 URLS_DFE = {
     "AC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "AL": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
@@ -49,7 +55,7 @@ UF_PARA_CODIGO = {
 def detectar_uf_da_chave(chave: str) -> str:
     codigo = chave[:2]
     if codigo not in UF_PARA_CODIGO:
-        raise ValueError(f"Código de UF inválido: {codigo}")
+        raise ValueError(f"Código de UF inválido na chave: {codigo}")
     return UF_PARA_CODIGO[codigo]
 
 def converter_pfx_para_pem(pfx_path: Path, senha: str):
@@ -70,6 +76,15 @@ def converter_pfx_para_pem(pfx_path: Path, senha: str):
     ], check=True, capture_output=True)
     
     return cert_pem, key_pem
+
+class TLSAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.set_ciphers('DEFAULT@SECLEVEL=1')
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        kwargs['ssl_context'] = ctx
+        return super().init_poolmanager(*args, **kwargs)
 
 def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     url = URLS_DFE.get(uf)
@@ -97,7 +112,6 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     dist_dfe_int = root.xpath("//ns:distDFeInt", namespaces={"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"})[0]
     
     with open(cert_pem, "rb") as f_cert, open(key_pem, "rb") as f_key:
-        # 👇 REMOVIDO allowed_digests (só existe no signxml >=3.0.0)
         signer = XMLSigner(
             method=methods.enveloped,
             signature_algorithm="rsa-sha1",
@@ -109,12 +123,13 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     parent = dist_dfe_int.getparent()
     parent.replace(dist_dfe_int, signed_dist)
 
+    session = requests.Session()
+    session.mount('https://', TLSAdapter())
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
     }
-    
-    response = requests.post(url, data=etree.tostring(root), headers=headers, timeout=30)
+    response = session.post(url, data=etree.tostring(root), headers=headers, timeout=30, verify=False)
     response.raise_for_status()
 
     root_resp = etree.fromstring(response.content)
