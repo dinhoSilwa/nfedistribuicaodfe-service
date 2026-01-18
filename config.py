@@ -10,7 +10,7 @@ CERT_PASSWORD = "123456"  # Altere para a senha real
 CNPJ_INTERESSADO = "34683891000140"
 
 # Chave de acesso da NFC-e/NF-e que deseja buscar
-CHAVE_DESEJADA = "23250834683891000140650260000032901001144563"
+CHAVE_DESEJADA = "23250834683891000140650220000207061299677609"
 
 # Nome da pasta (dentro do diretório do script) onde os XMLs serão salvos
 PASTA_XML = "xmls"
