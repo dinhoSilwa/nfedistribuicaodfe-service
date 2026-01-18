@@ -74,11 +74,9 @@ def baixar_xml_por_chave(chave: str, cert_pem: Path, key_pem: Path, pasta_saida:
         # Inicializa comunicação com a SEFAZ
         con = ComunicacaoSefaz(
             uf=uf,
-            certificado=str(cert_pem),
-            key=str(key_pem),
+            certificado=(str(cert_pem), str(key_pem)),  # Tupla (cert, key)
             homologacao=False
         )
-
         # Faz a consulta à distribuição DFe
         resposta = con.distribuicao_dfe(cnpj=None, chave=chave)
 
