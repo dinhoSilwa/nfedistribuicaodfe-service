@@ -2,7 +2,53 @@
 import time
 from pathlib import Path
 from pynfe.processamento.comunicacao import ComunicacaoSefaz
-from pynfe.utils import extrair_dfe
+
+def extrair_dfe(resposta_xml, tipo="nfe"):
+    """
+    Extrai o XML da nota fiscal (NF-e ou NFC-e) da resposta do serviço NFeDistribuicaoDFe.
+    
+    :param resposta_xml: Elemento XML da resposta SOAP (lxml.etree._Element)
+    :param tipo: "nfe" ou "nfce"
+    :return: str com o XML da nota fiscal, ou None se não encontrado
+    """
+    # Namespace da resposta
+    ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
+
+    # Localiza o campo com o documento compactado
+    lote = resposta_xml.xpath("//ns:retDistDFeInt/ns:loteDistDFeZip", namespaces=ns)
+    if not lote:
+        return None
+
+    # Decodifica base64
+    conteudo_base64 = lote[0].text
+    if not conteudo_base64:
+        return None
+
+    try:
+        dados_zip = base64.b64decode(conteudo_base64)
+        xml_descomprimido = gzip.decompress(dados_zip).decode("utf-8")
+    except Exception:
+        return None
+
+    # Parseia o XML resultante
+    root = etree.fromstring(xml_descomprimido)
+
+    # Determina a tag esperada
+    if tipo == "nfce":
+        xpath_expr = ".//ns:NFe[ns:infNFe/@mod='65']"
+    else:
+        xpath_expr = ".//ns:NFe[ns:infNFe/@mod='55']"
+
+    notas = root.xpath(xpath_expr, namespaces={"ns": "http://www.portalfiscal.inf.br/nfe"})
+    if notas:
+        return etree.tostring(notas[0], encoding="unicode", pretty_print=True)
+
+    # Fallback: retorna qualquer NFe se não encontrar por modelo
+    qualquer_nfe = root.xpath(".//ns:NFe", namespaces={"ns": "http://www.portalfiscal.inf.br/nfe"})
+    if qualquer_nfe:
+        return etree.tostring(qualquer_nfe[0], encoding="unicode", pretty_print=True)
+
+    return None
 
 def detectar_uf_da_chave(chave: str) -> str:
     """Extrai UF dos primeiros 2 dígitos da chave (ex: 23 → CE)."""

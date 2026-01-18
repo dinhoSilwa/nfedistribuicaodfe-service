@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# Selenium/Chrome
+chromedriver*
+geckodriver*
+msedgedriver*
+*.log
+
+# Downloads do projeto
+downloads/
+!downloads/.gitkeep
+xmls_baixados/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Virtual environment
+pyvenv.cfg
+
+# Pycharm
+.idea/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs
+*.log
+logs/
+
+# Testes
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Configurações específicas
+config.py
+secrets.py
+*.key
+*.pem
+chaves.txt
+req.xml
+
+# Arquivos temporários
+tmp/
+temp/
+
+# Backups
+*.bak
+*.backup
+
+# Arquivos grandes/binary
+*.zip
+*.7z
+*.rar
+*.tar.gz
+*.bin
+
+# Chrome driver gerenciado pelo webdriver-manager
+.driver_cache/
