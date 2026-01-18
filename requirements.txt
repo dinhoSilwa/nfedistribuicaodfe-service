@@ -2,3 +2,11 @@ zeep>=4.2.0
 requests>=2.31.0
 requests-pkcs12>=1.18
 lxml>=4.9.0
+# Dependências principais para download de XML via PyNFe
+PyNFe>=0.4.4
+python-dotenv>=1.0.0
+requests>=2.32.0
+lxml>=5.4.0
+signxml>=4.1.0
+cryptography>=43.0.0
+pyOpenSSL>=25.1.0
