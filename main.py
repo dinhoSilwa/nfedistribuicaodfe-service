@@ -1,4 +1,4 @@
-# main.py (CORRIGIDO - FORMATO CORRETO)
+# main.py (VERSÃO FINAL - PARSEANDO XML DA RESPOSTA)
 
 import base64
 from pathlib import Path
@@ -9,7 +9,6 @@ from requests_pkcs12 import Pkcs12Adapter
 from zeep import Client
 from zeep.exceptions import Fault
 from zeep.transports import Transport
-from zeep.wsse.utils import WSU
 
 import config
 
@@ -26,39 +25,76 @@ STATUS_MAP = {
 }
 
 
-def extrair_status(resposta):
-    """Extrai cStat e xMotivo de forma segura"""
-    if resposta is None:
-        return None, "Resposta SOAP vazia"
+def extrair_status_de_xml(response_element):
+    """
+    Extrai cStat e xMotivo do elemento XML da resposta
+    """
+    if response_element is None:
+        return None, "Resposta vazia"
 
     try:
-        cStat = getattr(resposta, "cStat", None)
-        xMotivo = getattr(resposta, "xMotivo", None)
+        # A resposta vem como elemento XML, precisamos navegar nele
+        # Namespace pode variar, então vamos procurar sem namespace específico
 
-        if cStat is None:
-            return None, "Resposta sem cStat (estrutura inesperada)"
+        # Tentar encontrar cStat
+        cstat_elem = response_element.find(".//{http://www.portalfiscal.inf.br/nfe}cStat")
+        if cstat_elem is None:
+            cstat_elem = response_element.find(".//cStat")
 
-        return str(cStat), xMotivo or ""
+        # Tentar encontrar xMotivo
+        xmotivo_elem = response_element.find(".//{http://www.portalfiscal.inf.br/nfe}xMotivo")
+        if xmotivo_elem is None:
+            xmotivo_elem = response_element.find(".//xMotivo")
+
+        if cstat_elem is None:
+            # DEBUG: mostrar estrutura do XML
+            print("\n🔍 Estrutura do XML recebido:")
+            print(etree.tostring(response_element, pretty_print=True, encoding="unicode")[:1000])
+            return None, "cStat não encontrado no XML"
+
+        cStat = cstat_elem.text
+        xMotivo = xmotivo_elem.text if xmotivo_elem is not None else ""
+
+        return str(cStat), xMotivo
 
     except Exception as e:
-        return None, f"Erro ao interpretar resposta: {e}"
+        return None, f"Erro ao parsear XML: {e}"
 
 
-def salvar_xml_erro(client, nome_arquivo="erro_sefaz.xml"):
-    """Salva XML bruto da resposta em caso de erro"""
+def extrair_documentos(response_element):
+    """
+    Extrai lista de documentos do lote
+    """
     try:
-        raw_xml = client.transport.session.last_response.content
-        erro_xml = Path(nome_arquivo)
-        erro_xml.write_bytes(raw_xml)
-        print(f"🧪 XML bruto salvo para análise: {erro_xml.resolve()}")
+        # Procurar pelos docZip
+        docs = []
 
-        # Mostrar o XML também
-        print("\n📄 XML da Resposta:")
-        print(raw_xml.decode("utf-8")[:2000])  # Primeiros 2000 chars
-        print("...")
+        # Tentar com namespace
+        doc_zips = response_element.findall(".//{http://www.portalfiscal.inf.br/nfe}docZip")
+
+        # Se não encontrou, tentar sem namespace
+        if not doc_zips:
+            doc_zips = response_element.findall(".//docZip")
+
+        for doc_zip in doc_zips:
+            # Extrair NSU
+            nsu_elem = (
+                doc_zip.get("NSU")
+                or doc_zip.findtext(".//{http://www.portalfiscal.inf.br/nfe}NSU")
+                or doc_zip.findtext(".//NSU")
+            )
+
+            # Extrair valor base64
+            value = doc_zip.text or ""
+
+            if nsu_elem and value:
+                docs.append({"NSU": nsu_elem, "value": value})
+
+        return docs
 
     except Exception as e:
-        print(f"⚠️ Não foi possível salvar XML de erro: {e}")
+        print(f"⚠️ Erro ao extrair documentos: {e}")
+        return []
 
 
 def main():
@@ -100,12 +136,12 @@ def main():
         print(f"🔍 Consultando NSU: {nsu}")
 
         try:
-            # ✅ CRIAR HEADER COM NAMESPACE CORRETO
+            # Criar header
             header_element = etree.Element("{http://www.portalfiscal.inf.br/nfe}nfeCabecMsg")
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}cUF").text = "23"
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}versaoDados").text = "1.01"
 
-            # ✅ CRIAR BODY - ELEMENTO XML PURO
+            # Criar body
             distDFeInt = etree.Element("{http://www.portalfiscal.inf.br/nfe}distDFeInt", versao="1.01")
             etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}tpAmb").text = "1"
             etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}CNPJ").text = CNPJ_INTERESSADO
@@ -113,16 +149,12 @@ def main():
             distNSU = etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}distNSU")
             etree.SubElement(distNSU, "{http://www.portalfiscal.inf.br/nfe}ultNSU").text = nsu
 
-            # ✅ CHAMAR SERVIÇO COM ELEMENTO XML DIRETO
-            response = client.service.nfeDistDFeInteresse(
-                nfeDadosMsg=distDFeInt, _soapheaders=[header_element]  # XML Element direto
-            )
+            response = client.service.nfeDistDFeInteresse(nfeDadosMsg=distDFeInt, _soapheaders=[header_element])
 
         except Fault as fault:
             print("❌ SOAP Fault retornado pela SEFAZ")
             print(f"Fault code: {fault.code}")
             print(f"Fault message: {fault.message}")
-            salvar_xml_erro(client, "fault_sefaz.xml")
             break
 
         except Exception as e:
@@ -130,26 +162,23 @@ def main():
             import traceback
 
             traceback.print_exc()
-            salvar_xml_erro(client, "exception_sefaz.xml")
             break
 
         if response is None:
             print("❌ Resposta SOAP vazia (None).")
-            print("➡️ Possível erro de schema, rejeição grave ou falha de comunicação.")
-            salvar_xml_erro(client, "none_response.xml")
             break
 
-        # DEBUG: Ver estrutura da resposta
-        print(f"\n🔬 Tipo da resposta: {type(response)}")
-        print(f"🔬 Atributos disponíveis: {[a for a in dir(response) if not a.startswith('_')]}")
-
-        cStat, xMotivo = extrair_status(response)
+        # ✅ PARSEAR XML DA RESPOSTA
+        cStat, xMotivo = extrair_status_de_xml(response)
 
         print(f"📄 Retorno SEFAZ: {cStat} - {xMotivo}")
 
         if cStat is None:
             print("❌ Não foi possível interpretar o retorno da SEFAZ.")
-            salvar_xml_erro(client, "no_cstat.xml")
+            # Salvar XML para debug
+            xml_debug = Path("resposta_debug.xml")
+            xml_debug.write_bytes(etree.tostring(response, pretty_print=True))
+            print(f"🧪 XML da resposta salvo em: {xml_debug.resolve()}")
             break
 
         if cStat in STATUS_MAP:
@@ -166,22 +195,23 @@ def main():
 
         if cStat != "138":
             print("❌ Rejeição SEFAZ.")
-            salvar_xml_erro(client, f"rejeicao_{cStat}.xml")
             break
 
-        lote = getattr(response, "loteDistDFeInt", None)
-        docs = getattr(lote, "docZip", []) if lote else []
+        # ✅ EXTRAIR DOCUMENTOS DO XML
+        docs = extrair_documentos(response)
 
         if not docs:
             print("ℹ️ Nenhum documento retornado.")
             break
 
+        print(f"📦 {len(docs)} documento(s) encontrado(s) neste lote")
+
         for doc in docs:
-            nsu = doc.NSU
+            nsu = doc["NSU"]
             ARQ_ULT_NSU.write_text(nsu)
 
             try:
-                xml_bytes = base64.b64decode(doc.value)
+                xml_bytes = base64.b64decode(doc["value"])
                 root = etree.fromstring(xml_bytes)
 
                 inf_nfe = root.find(".//{http://www.portalfiscal.inf.br/nfe}infNFe")
