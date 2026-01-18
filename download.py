@@ -85,8 +85,10 @@ class TLSAdapter(HTTPAdapter):
         ctx.minimum_version = ssl.TLSVersion.TLSv1
         ctx.maximum_version = ssl.TLSVersion.TLSv1_2
         kwargs['ssl_context'] = ctx
+        kwargs['assert_hostname'] = False
+        kwargs['cert_reqs'] = ssl.CERT_NONE
         return super().init_poolmanager(*args, **kwargs)
-
+        
 def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     url = URLS_DFE.get(uf)
     if not url:
@@ -130,7 +132,7 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
     }
-    response = session.post(url, data=etree.tostring(root), headers=headers, timeout=30, verify=False)
+    response = session.post(url, data=etree.tostring(root), headers=headers, timeout=30)
     response.raise_for_status()
 
     root_resp = etree.fromstring(response.content)
