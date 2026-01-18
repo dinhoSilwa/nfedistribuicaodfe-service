@@ -8,10 +8,8 @@ from lxml import etree
 from signxml import XMLSigner, methods
 from config import CERT_PFX_PATH, CERT_PASSWORD
 
-# URLs oficiais do serviço NFeDistribuicaoDFe (produção)
-# Fonte: https://www.nfe.fazenda.gov.br/portal/webServices.aspx
+# URLs oficiais SEM espaços no final
 URLS_DFE = {
-    # UFs que usam SVRS
     "AC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "AL": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "AM": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
@@ -78,7 +76,6 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     if not url:
         raise ValueError(f"URL não configurada para UF: {uf}")
 
-    # Corpo da requisição SOAP
     soap_body = f"""
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe">
         <soapenv:Header/>
@@ -97,24 +94,18 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     """.strip()
 
     root = etree.fromstring(soap_body.encode("utf-8"))
-    
-    # Localiza o elemento a ser assinado
     dist_dfe_int = root.xpath("//ns:distDFeInt", namespaces={"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"})[0]
     
     with open(cert_pem, "rb") as f_cert, open(key_pem, "rb") as f_key:
+        # 👇 REMOVIDO allowed_digests (só existe no signxml >=3.0.0)
         signer = XMLSigner(
             method=methods.enveloped,
             signature_algorithm="rsa-sha1",
             digest_algorithm="sha1",
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
         )
-        # Permite SHA1 (obrigatório para SEFAZ)
-        signer._default_allowed_digests = ["sha1", "sha224", "sha256", "sha384", "sha512"]
-        signer._default_allowed_signature_methods = ["rsa-sha1", "rsa-sha224", "rsa-sha256", "rsa-sha384", "rsa-sha512"]
-        
         signed_dist = signer.sign(dist_dfe_int, key=f_key.read(), cert=f_cert.read())
     
-    # Substitui o elemento original pelo assinado
     parent = dist_dfe_int.getparent()
     parent.replace(dist_dfe_int, signed_dist)
 
@@ -126,7 +117,6 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     response = requests.post(url, data=etree.tostring(root), headers=headers, timeout=30)
     response.raise_for_status()
 
-    # Extrai o resultado
     root_resp = etree.fromstring(response.content)
     ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
     lote_zip = root_resp.xpath("//ns:loteDistDFeZip", namespaces=ns)
@@ -158,7 +148,6 @@ def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem:
 
 def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     pasta_saida.mkdir(parents=True, exist_ok=True)
-    
     cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
 
     for i, chave in enumerate(chaves, start=1):
@@ -166,7 +155,6 @@ def baixar_em_massa(chaves: list[str], pasta_saida: Path):
         if len(chave) != 44 or not chave.isdigit():
             print(f"⚠️  Chave inválida ignorada: {chave}")
             continue
-
         baixar_xml_por_chave(chave, pasta_saida, cert_pem, key_pem)
         time.sleep(1.5)
 
