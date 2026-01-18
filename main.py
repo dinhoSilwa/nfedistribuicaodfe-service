@@ -1,4 +1,4 @@
-# main.py (VERSÃO FINAL - PARSEANDO XML DA RESPOSTA)
+# main.py (CORRIGIDO - SEM PREFIXOS)
 
 import base64
 from pathlib import Path
@@ -21,33 +21,27 @@ STATUS_MAP = {
     "217": "Rejeição: Falha no schema XML",
     "225": "Rejeição: Falha no Schema XML da NFe",
     "214": "Tamanho da mensagem excedeu o limite",
+    "404": "Rejeição: Uso de prefixo de namespace não permitido",
     "999": "Erro interno SEFAZ",
 }
 
 
 def extrair_status_de_xml(response_element):
-    """
-    Extrai cStat e xMotivo do elemento XML da resposta
-    """
+    """Extrai cStat e xMotivo do elemento XML da resposta"""
     if response_element is None:
         return None, "Resposta vazia"
 
     try:
-        # A resposta vem como elemento XML, precisamos navegar nele
-        # Namespace pode variar, então vamos procurar sem namespace específico
-
-        # Tentar encontrar cStat
+        # Procurar cStat com e sem namespace
         cstat_elem = response_element.find(".//{http://www.portalfiscal.inf.br/nfe}cStat")
         if cstat_elem is None:
             cstat_elem = response_element.find(".//cStat")
 
-        # Tentar encontrar xMotivo
         xmotivo_elem = response_element.find(".//{http://www.portalfiscal.inf.br/nfe}xMotivo")
         if xmotivo_elem is None:
             xmotivo_elem = response_element.find(".//xMotivo")
 
         if cstat_elem is None:
-            # DEBUG: mostrar estrutura do XML
             print("\n🔍 Estrutura do XML recebido:")
             print(etree.tostring(response_element, pretty_print=True, encoding="unicode")[:1000])
             return None, "cStat não encontrado no XML"
@@ -62,29 +56,21 @@ def extrair_status_de_xml(response_element):
 
 
 def extrair_documentos(response_element):
-    """
-    Extrai lista de documentos do lote
-    """
+    """Extrai lista de documentos do lote"""
     try:
-        # Procurar pelos docZip
         docs = []
 
-        # Tentar com namespace
         doc_zips = response_element.findall(".//{http://www.portalfiscal.inf.br/nfe}docZip")
 
-        # Se não encontrou, tentar sem namespace
         if not doc_zips:
             doc_zips = response_element.findall(".//docZip")
 
         for doc_zip in doc_zips:
-            # Extrair NSU
             nsu_elem = (
                 doc_zip.get("NSU")
                 or doc_zip.findtext(".//{http://www.portalfiscal.inf.br/nfe}NSU")
                 or doc_zip.findtext(".//NSU")
             )
-
-            # Extrair valor base64
             value = doc_zip.text or ""
 
             if nsu_elem and value:
@@ -136,18 +122,18 @@ def main():
         print(f"🔍 Consultando NSU: {nsu}")
 
         try:
-            # Criar header
+            # ✅ HEADER - Criar com namespace no elemento
             header_element = etree.Element("{http://www.portalfiscal.inf.br/nfe}nfeCabecMsg")
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}cUF").text = "23"
             etree.SubElement(header_element, "{http://www.portalfiscal.inf.br/nfe}versaoDados").text = "1.01"
 
-            # Criar body
-            distDFeInt = etree.Element("{http://www.portalfiscal.inf.br/nfe}distDFeInt", versao="1.01")
-            etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}tpAmb").text = "1"
-            etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}CNPJ").text = CNPJ_INTERESSADO
+            # ✅ BODY - SEM PREFIXO, APENAS XMLNS DEFAULT
+            distDFeInt = etree.Element("distDFeInt", versao="1.01", nsmap={None: NS})  # Namespace padrão SEM prefixo
+            etree.SubElement(distDFeInt, "tpAmb").text = "1"
+            etree.SubElement(distDFeInt, "CNPJ").text = CNPJ_INTERESSADO
 
-            distNSU = etree.SubElement(distDFeInt, "{http://www.portalfiscal.inf.br/nfe}distNSU")
-            etree.SubElement(distNSU, "{http://www.portalfiscal.inf.br/nfe}ultNSU").text = nsu
+            distNSU = etree.SubElement(distDFeInt, "distNSU")
+            etree.SubElement(distNSU, "ultNSU").text = nsu
 
             response = client.service.nfeDistDFeInteresse(nfeDadosMsg=distDFeInt, _soapheaders=[header_element])
 
@@ -168,14 +154,12 @@ def main():
             print("❌ Resposta SOAP vazia (None).")
             break
 
-        # ✅ PARSEAR XML DA RESPOSTA
         cStat, xMotivo = extrair_status_de_xml(response)
 
         print(f"📄 Retorno SEFAZ: {cStat} - {xMotivo}")
 
         if cStat is None:
             print("❌ Não foi possível interpretar o retorno da SEFAZ.")
-            # Salvar XML para debug
             xml_debug = Path("resposta_debug.xml")
             xml_debug.write_bytes(etree.tostring(response, pretty_print=True))
             print(f"🧪 XML da resposta salvo em: {xml_debug.resolve()}")
@@ -197,7 +181,6 @@ def main():
             print("❌ Rejeição SEFAZ.")
             break
 
-        # ✅ EXTRAIR DOCUMENTOS DO XML
         docs = extrair_documentos(response)
 
         if not docs:
