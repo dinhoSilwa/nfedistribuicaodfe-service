@@ -3,11 +3,9 @@ import base64
 import gzip
 import time
 from pathlib import Path
-import requests
 import urllib3
+from urllib3.util.ssl_ import create_urllib3_context
 import ssl
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.ssl_ import create_urllib3_context
 from lxml import etree
 from signxml import XMLSigner, methods
 from config import CERT_PFX_PATH, CERT_PASSWORD
@@ -78,21 +76,16 @@ def converter_pfx_para_pem(pfx_path: Path, senha: str):
     
     return cert_pem, key_pem
 
-class TLSAdapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        ctx.set_ciphers('DEFAULT@SECLEVEL=1')
-        ctx.minimum_version = ssl.TLSVersion.TLSv1
-        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        kwargs['ssl_context'] = ctx
-        kwargs['assert_hostname'] = False
-        kwargs['cert_reqs'] = ssl.CERT_NONE
-        return super().init_poolmanager(*args, **kwargs)
-        
 def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     url = URLS_DFE.get(uf)
     if not url:
         raise ValueError(f"URL não configurada para UF: {uf}")
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname
+    port = parsed.port or 443
+    path = parsed.path or "/"
 
     soap_body = f"""
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe">
@@ -126,16 +119,36 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
     parent = dist_dfe_int.getparent()
     parent.replace(dist_dfe_int, signed_dist)
 
-    session = requests.Session()
-    session.mount('https://', TLSAdapter())
+    # Contexto SSL personalizado
+    ctx = create_urllib3_context()
+    ctx.set_ciphers('DEFAULT@SECLEVEL=1')
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    http = urllib3.HTTPSConnectionPool(
+        host=host,
+        port=port,
+        ssl_context=ctx,
+        timeout=30,
+        retries=False
+    )
+
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
     }
-    response = session.post(url, data=etree.tostring(root), headers=headers, timeout=30)
-    response.raise_for_status()
 
-    root_resp = etree.fromstring(response.content)
+    response = http.request(
+        "POST",
+        path,
+        body=etree.tostring(root),
+        headers=headers
+    )
+
+    if response.status != 200:
+        raise Exception(f"Erro HTTP {response.status}")
+
+    root_resp = etree.fromstring(response.data)
     ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
     lote_zip = root_resp.xpath("//ns:loteDistDFeZip", namespaces=ns)
     
