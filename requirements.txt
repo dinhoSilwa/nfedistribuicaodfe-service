@@ -1,2 +1,4 @@
-selenium>=4.16.0
-webdriver-manager>=4.0.1
+zeep>=4.2.0
+requests>=2.31.0
+requests-pkcs12>=1.18
+lxml>=4.9.0

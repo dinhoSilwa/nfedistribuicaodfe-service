@@ -1,101 +1,156 @@
-```python
-import time
-import logging
+# main.py
+
+import base64
 from pathlib import Path
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from lxml import etree
+from requests import Session
+from requests_pkcs12 import Pkcs12Adapter
+from zeep import Client
+from zeep.transports import Transport
 
-CHAVE = "23250834683891000140650260000032871604904017"
-URL = "https://dfe-portal.svrs.rs.gov.br/NfceSSL/DownloadXmlDfe"
+import config
 
-PASTA_DOWNLOAD = Path("downloads").resolve()
-PASTA_DOWNLOAD.mkdir(parents=True, exist_ok=True)
+NS = "http://www.portalfiscal.inf.br/nfe"
 
-def aguardar_download_completo(pasta: Path, arquivos_antes: set, timeout: int = 90) -> Path:
-    inicio = time.time()
-    crdownload_detectado = False
-
-    while time.time() - inicio < timeout:
-        arquivos_atual = set(pasta.iterdir())
-        novos = arquivos_atual - arquivos_antes
-        crdownloads = [a for a in novos if a.suffix == ".crdownload"]
-        xmls = [a for a in novos if a.suffix == ".xml"]
-
-        if crdownloads:
-            crdownload_detectado = True
-
-        if crdownload_detectado and not crdownloads and xmls:
-            return xmls[0]
-
-        time.sleep(0.5)
-
-    raise TimeoutError("Download não finalizado dentro do tempo esperado")
 
 def main():
-    options = webdriver.ChromeOptions()
-    options.add_argument("--start-maximized")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    CERT_PFX = config.CERT_PFX
+    CERT_PASSWORD = config.CERT_PASSWORD
+    CNPJ_INTERESSADO = config.CNPJ_INTERESSADO
+    CHAVE_DESEJADA = config.CHAVE_DESEJADA
+    PASTA_XML = Path(__file__).parent / config.PASTA_XML
+    ARQ_ULT_NSU = Path(__file__).parent / "ult_nsu.txt"
 
-    prefs = {
-        "download.default_directory": str(PASTA_DOWNLOAD),
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True,
-    }
-    options.add_experimental_option("prefs", prefs)
+    PASTA_XML.mkdir(exist_ok=True)
 
-    driver = None
-    try:
-        logging.info("Iniciando o WebDriver...")
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        wait = WebDriverWait(driver, 30)
+    print(f"📁 XMLs serão salvos em: {PASTA_XML.resolve()}")
 
-        logging.info(f"Acessando URL: {URL}")
-        driver.get(URL)
+    # ===============================
+    # Sessão HTTPS com certificado A1
+    # ===============================
+    session = Session()
+    session.mount(
+        "https://",
+        Pkcs12Adapter(
+            pkcs12_filename=CERT_PFX,
+            pkcs12_password=CERT_PASSWORD,
+        ),
+    )
 
-        if "Erro no processamento do Portal" in driver.page_source:
-            raise RuntimeError("Página retornou erro imediato. Certifique-se de que o certificado digital está configurado.")
+    client = Client(
+        "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx?wsdl",
+        transport=Transport(session=session),
+    )
 
-        arquivos_antes = set(PASTA_DOWNLOAD.iterdir())
+    # ===============================
+    # Controle de ultNSU persistido
+    # ===============================
+    if ARQ_ULT_NSU.exists():
+        nsu = ARQ_ULT_NSU.read_text().strip()
+    else:
+        nsu = "000000000000000"
 
-        logging.info("Preenchendo chave de acesso...")
-        input_chave = wait.until(EC.presence_of_element_located((By.ID, "ChaveAcessoDfe")))
-        input_chave.clear()
-        input_chave.send_keys(CHAVE)
+    print(f"🔁 ultNSU inicial: {nsu}")
 
-        logging.info("Clicando em 'Consultar'...")
-        botao_consultar = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "btn-primary")))
-        botao_consultar.click()
+    encontrado = False
 
-        time.sleep(2)
+    while True:
+        print(f"🔍 Consultando NSU: {nsu}")
 
-        erros = driver.find_elements(By.CLASS_NAME, "alert-danger")
-        if erros:
-            raise RuntimeError(f"Erro retornado pelo portal: {erros[0].text.strip()}")
+        try:
+            # ===============================
+            # SOAP HEADER (OBRIGATÓRIO)
+            # ===============================
+            cabec = etree.Element(f"{{{NS}}}nfeCabecMsg")
+            etree.SubElement(cabec, f"{{{NS}}}cUF").text = "23"
+            etree.SubElement(cabec, f"{{{NS}}}versaoDados").text = "1.01"
 
-        logging.info("Aguardando botão de download...")
-        botao_download = wait.until(EC.element_to_be_clickable((By.ID, "btnExportar")))
+            # ===============================
+            # SOAP BODY (xsd:any → SEM wrapper)
+            # ===============================
+            distDFeInt = etree.Element(
+                "distDFeInt",
+                versao="1.01",
+                xmlns=NS,
+            )
 
-        logging.info("Iniciando download...")
-        botao_download.click()
+            etree.SubElement(distDFeInt, "tpAmb").text = "1"
+            etree.SubElement(distDFeInt, "CNPJ").text = CNPJ_INTERESSADO
 
-        arquivo_xml = aguardar_download_completo(pasta=PASTA_DOWNLOAD, arquivos_antes=arquivos_antes)
-        logging.info(f"Download concluído com sucesso: {arquivo_xml.name}")
+            distNSU = etree.SubElement(distDFeInt, "distNSU")
+            etree.SubElement(distNSU, "ultNSU").text = nsu
 
-    except Exception as e:
-        logging.error(f"Ocorreu um erro: {e}")
-        raise
-    finally:
-        if driver:
-            driver.quit()
+            response = client.service.nfeDistDFeInteresse(
+                distDFeInt,
+                _soapheaders=[cabec],
+            )
+
+        except Exception as e:
+            print(f"❌ Erro na requisição SOAP: {e}")
+            break
+
+        cStat = getattr(response, "cStat", None)
+        xMotivo = getattr(response, "xMotivo", "")
+
+        print(f"📄 Retorno SEFAZ: {cStat} - {xMotivo}")
+
+        # ===============================
+        # Tratamento de status
+        # ===============================
+        if cStat == "137":
+            print("ℹ️ Nenhum documento disponível para este NSU.")
+            break
+
+        if cStat == "656":
+            print("⏳ Consumo indevido. Aguarde 1 hora e reutilize o ultNSU.")
+            break
+
+        if cStat != "138":
+            print("❌ Rejeição SEFAZ.")
+            break
+
+        lote = getattr(response, "loteDistDFeInt", None)
+        docs = getattr(lote, "docZip", []) if lote else []
+
+        if not docs:
+            print("ℹ️ Nenhum documento retornado.")
+            break
+
+        for doc in docs:
+            nsu = doc.NSU
+            ARQ_ULT_NSU.write_text(nsu)
+
+            try:
+                xml_bytes = base64.b64decode(doc.value)
+                root = etree.fromstring(xml_bytes)
+
+                inf_nfe = root.find(".//{http://www.portalfiscal.inf.br/nfe}infNFe")
+                if inf_nfe is None:
+                    continue
+
+                chave_xml = inf_nfe.get("Id", "")[3:]
+
+                if chave_xml == CHAVE_DESEJADA:
+                    caminho = PASTA_XML / f"{chave_xml}.xml"
+                    with open(caminho, "wb") as f:
+                        f.write(xml_bytes)
+
+                    print(f"✅ XML encontrado e salvo: {caminho}")
+                    encontrado = True
+                    break
+
+            except Exception as e:
+                print(f"⚠️ Erro ao processar NSU {nsu}: {e}")
+
+        if encontrado or len(docs) < 50:
+            break
+
+    if not encontrado:
+        print("❌ Nota fiscal não encontrada.")
+        print("✔️ Verifique se o CNPJ participa da operação.")
+        print("✔️ Verifique se a NF-e/NFC-e já foi distribuída.")
+
 
 if __name__ == "__main__":
     main()
-```
