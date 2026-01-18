@@ -1,101 +1,165 @@
 # download.py
+import base64
+import gzip
 import time
 from pathlib import Path
-from pynfe.processamento.comunicacao import ComunicacaoSefaz
+import requests
+from lxml import etree
+from signxml import XMLSigner, methods
+from config import CERT_PFX_PATH, CERT_PASSWORD
 
-def extrair_dfe(resposta_xml, tipo="nfe"):
-    """
-    Extrai o XML da nota fiscal (NF-e ou NFC-e) da resposta do serviço NFeDistribuicaoDFe.
+# URLs oficiais do serviço NFeDistribuicaoDFe (produção)
+# Fonte: https://www.nfe.fazenda.gov.br/portal/webServices.aspx
+URLS_DFE = {
+    # UFs que usam SVRS
+    "AC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "AL": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "AM": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "AP": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "BA": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "CE": "https://nfe.sefaz.ce.gov.br/nfe4/services/NFeDistribuicaoDFe",
+    "DF": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "ES": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "GO": "https://nfe.sefaz.go.gov.br/nfe/services/v2/NfeDistribuicaoDFe",
+    "MA": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "MS": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "MT": "https://nfe.sefaz.mt.gov.br/nfews/v2/services/NfeDistribuicaoDFe",
+    "PA": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "PB": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "PI": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "PR": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "RJ": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "RN": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "RO": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "RR": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "RS": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "SC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "SE": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
+    "SP": "https://nfe.fazenda.sp.gov.br/ws/nfedistribuicaodfe.asmx",
+    "TO": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
+}
+
+UF_PARA_CODIGO = {
+    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA",
+    "16": "AP", "17": "TO", "21": "MA", "22": "PI", "23": "CE",
+    "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE",
+    "29": "BA", "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
+    "41": "PR", "42": "SC", "43": "RS", "50": "MS", "51": "MT",
+    "52": "GO", "53": "DF"
+}
+
+def detectar_uf_da_chave(chave: str) -> str:
+    codigo = chave[:2]
+    if codigo not in UF_PARA_CODIGO:
+        raise ValueError(f"Código de UF inválido: {codigo}")
+    return UF_PARA_CODIGO[codigo]
+
+def converter_pfx_para_pem(pfx_path: Path, senha: str):
+    import subprocess
+    cert_pem = pfx_path.with_suffix(".cert.pem")
+    key_pem = pfx_path.with_suffix(".key.pem")
     
-    :param resposta_xml: Elemento XML da resposta SOAP (lxml.etree._Element)
-    :param tipo: "nfe" ou "nfce"
-    :return: str com o XML da nota fiscal, ou None se não encontrado
-    """
-    # Namespace da resposta
+    subprocess.run([
+        "openssl", "pkcs12", "-in", str(pfx_path),
+        "-clcerts", "-nokeys", "-out", str(cert_pem),
+        "-passin", f"pass:{senha}"
+    ], check=True, capture_output=True)
+    
+    subprocess.run([
+        "openssl", "pkcs12", "-in", str(pfx_path),
+        "-nocerts", "-nodes", "-out", str(key_pem),
+        "-passin", f"pass:{senha}"
+    ], check=True, capture_output=True)
+    
+    return cert_pem, key_pem
+
+def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path):
+    url = URLS_DFE.get(uf)
+    if not url:
+        raise ValueError(f"URL não configurada para UF: {uf}")
+
+    # Corpo da requisição SOAP
+    soap_body = f"""
+    <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe">
+        <soapenv:Header/>
+        <soapenv:Body>
+            <ns:distDFeInt>
+                <distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">
+                    <tpAmb>1</tpAmb>
+                    <cUFAutor>{chave[:2]}</cUFAutor>
+                    <consChNFe>
+                        <chNFe>{chave}</chNFe>
+                    </consChNFe>
+                </distDFeInt>
+            </ns:distDFeInt>
+        </soapenv:Body>
+    </soapenv:Envelope>
+    """.strip()
+
+    root = etree.fromstring(soap_body.encode("utf-8"))
+    
+    # Localiza o elemento a ser assinado
+    dist_dfe_int = root.xpath("//ns:distDFeInt", namespaces={"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"})[0]
+    
+    with open(cert_pem, "rb") as f_cert, open(key_pem, "rb") as f_key:
+        signer = XMLSigner(
+            method=methods.enveloped,
+            signature_algorithm="rsa-sha1",
+            digest_algorithm="sha1",
+            c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+        )
+        # Permite SHA1 (obrigatório para SEFAZ)
+        signer._default_allowed_digests = ["sha1", "sha224", "sha256", "sha384", "sha512"]
+        signer._default_allowed_signature_methods = ["rsa-sha1", "rsa-sha224", "rsa-sha256", "rsa-sha384", "rsa-sha512"]
+        
+        signed_dist = signer.sign(dist_dfe_int, key=f_key.read(), cert=f_cert.read())
+    
+    # Substitui o elemento original pelo assinado
+    parent = dist_dfe_int.getparent()
+    parent.replace(dist_dfe_int, signed_dist)
+
+    headers = {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
+    }
+    
+    response = requests.post(url, data=etree.tostring(root), headers=headers, timeout=30)
+    response.raise_for_status()
+
+    # Extrai o resultado
+    root_resp = etree.fromstring(response.content)
     ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
-
-    # Localiza o campo com o documento compactado
-    lote = resposta_xml.xpath("//ns:retDistDFeInt/ns:loteDistDFeZip", namespaces=ns)
-    if not lote:
-        return None
-
-    # Decodifica base64
-    conteudo_base64 = lote[0].text
-    if not conteudo_base64:
+    lote_zip = root_resp.xpath("//ns:loteDistDFeZip", namespaces=ns)
+    
+    if not lote_zip or not lote_zip[0].text:
         return None
 
     try:
-        dados_zip = base64.b64decode(conteudo_base64)
-        xml_descomprimido = gzip.decompress(dados_zip).decode("utf-8")
+        dados_zip = base64.b64decode(lote_zip[0].text)
+        xml_bytes = gzip.decompress(dados_zip)
+        return xml_bytes.decode("utf-8")
     except Exception:
         return None
 
-    # Parseia o XML resultante
-    root = etree.fromstring(xml_descomprimido)
-
-    # Determina a tag esperada
-    if tipo == "nfce":
-        xpath_expr = ".//ns:NFe[ns:infNFe/@mod='65']"
-    else:
-        xpath_expr = ".//ns:NFe[ns:infNFe/@mod='55']"
-
-    notas = root.xpath(xpath_expr, namespaces={"ns": "http://www.portalfiscal.inf.br/nfe"})
-    if notas:
-        return etree.tostring(notas[0], encoding="unicode", pretty_print=True)
-
-    # Fallback: retorna qualquer NFe se não encontrar por modelo
-    qualquer_nfe = root.xpath(".//ns:NFe", namespaces={"ns": "http://www.portalfiscal.inf.br/nfe"})
-    if qualquer_nfe:
-        return etree.tostring(qualquer_nfe[0], encoding="unicode", pretty_print=True)
-
-    return None
-
-def detectar_uf_da_chave(chave: str) -> str:
-    """Extrai UF dos primeiros 2 dígitos da chave (ex: 23 → CE)."""
-    codigos_uf = {
-        "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA",
-        "16": "AP", "17": "TO", "21": "MA", "22": "PI", "23": "CE",
-        "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE",
-        "29": "BA", "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
-        "41": "PR", "42": "SC", "43": "RS", "50": "MS", "51": "MT",
-        "52": "GO", "53": "DF"
-    }
-    codigo = chave[:2]
-    if codigo not in codigos_uf:
-        raise ValueError(f"Código de UF inválido na chave: {codigo}")
-    return codigos_uf[codigo]
-
-def baixar_xml_por_chave(chave: str, cert_pem: Path, key_pem: Path, pasta_saida: Path):
-    """Baixa um XML por chave usando PyNFe."""
+def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem: Path):
     uf = detectar_uf_da_chave(chave)
     print(f"📥 Consultando chave {chave} (UF={uf})...")
 
     try:
-        # Inicializa comunicação com a SEFAZ
-        con = ComunicacaoSefaz(
-            uf=uf,
-            certificado=(str(cert_pem), str(key_pem)),  # Tupla (cert, key)
-            homologacao=False
-        )
-        # Faz a consulta à distribuição DFe
-        resposta = con.distribuicao_dfe(cnpj=None, chave=chave)
-
-        # Extrai o XML da nota fiscal
-        xml_nota = extrair_dfe(resposta, tipo="nfce") or extrair_dfe(resposta, tipo="nfe")
-        
+        xml_nota = distribuicao_dfe(chave, uf, cert_pem, key_pem)
         if xml_nota:
             caminho_saida = pasta_saida / f"{chave}.xml"
             caminho_saida.write_text(xml_nota, encoding="utf-8")
-            print(f"✅ Salvo: {caminho_saida.name}")
+            print(f"✅ Salvo: {chave}.xml")
         else:
-            print(f"⚠️  Nenhum XML encontrado para a chave {chave}")
-
+            print(f"⚠️  Nenhum XML encontrado para {chave}")
     except Exception as e:
         print(f"❌ Erro na chave {chave}: {e}")
 
-def baixar_em_massa(chaves: list[str], cert_pem: Path, key_pem: Path, pasta_saida: Path):
-    """Baixa múltiplas chaves com pequeno delay entre requisições."""
+def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     pasta_saida.mkdir(parents=True, exist_ok=True)
+    
+    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
 
     for i, chave in enumerate(chaves, start=1):
         print(f"\n[{i}/{len(chaves)}]")
@@ -103,5 +167,8 @@ def baixar_em_massa(chaves: list[str], cert_pem: Path, key_pem: Path, pasta_said
             print(f"⚠️  Chave inválida ignorada: {chave}")
             continue
 
-        baixar_xml_por_chave(chave, cert_pem, key_pem, pasta_saida)
-        time.sleep(1.5)  # Respeita limite de ~40 req/min
+        baixar_xml_por_chave(chave, pasta_saida, cert_pem, key_pem)
+        time.sleep(1.5)
+
+    cert_pem.unlink(missing_ok=True)
+    key_pem.unlink(missing_ok=True)
