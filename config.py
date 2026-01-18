@@ -1,12 +1,22 @@
 # config.py
+from pathlib import Path
+import os
+from dotenv import load_dotenv
 
-# Caminho relativo ou absoluto do certificado A1 (.pfx ou .p12)
-CERT_PFX = "certificado.pfx"  # Altere para o nome real do seu arquivo
-# Senha do certificado
-CERT_PASSWORD = "123456"  # Altere para a senha real
-# CNPJ/CPF vinculado ao certificado (deve ter acesso à nota)
-CNPJ_INTERESSADO = "34683891000140"
-# Chave de acesso da NFC-e/NF-e que deseja buscar
-CHAVE_DESEJADA = "23250834683891000140650220000207061299677609"
-# Nome da pasta (dentro do diretório do script) onde os XMLs serão salvos
-PASTA_XML = "xmls"
+load_dotenv()
+
+# Arquivo de chaves
+ARQUIVO_CHAVES = Path("chaves.txt").resolve()
+
+# Pasta de saída dos XMLs
+PASTA_XMLS = Path("xmls_baixados").resolve()
+
+# Certificado
+CERT_PFX_PATH = Path(os.getenv("CERT_PFX_PATH", "certificado.pfx")).resolve()
+CERT_PASSWORD = os.getenv("CERT_PASSWORD")
+
+# Validação
+if not CERT_PFX_PATH.exists():
+    raise FileNotFoundError(f"Certificado não encontrado: {CERT_PFX_PATH}")
+if not CERT_PASSWORD:
+    raise ValueError("Senha do certificado ausente em CERT_PASSWORD no .env")
