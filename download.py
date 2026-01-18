@@ -10,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.ssl_ import create_urllib3_context
 from lxml import etree
 from signxml import XMLSigner, methods
+from config import CERT_PFX_PATH, CERT_PASSWORD
 
 # Desativa avisos de SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
