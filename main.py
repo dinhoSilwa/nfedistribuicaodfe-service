@@ -12,6 +12,7 @@ from zeep.transports import Transport
 
 import config
 
+
 NS = "http://www.portalfiscal.inf.br/nfe"
 
 # ✅ LISTA DAS 10 CHAVES QUE VOCÊ QUER
