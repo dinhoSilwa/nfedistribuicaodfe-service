@@ -1,16 +1,13 @@
-# download.py - VERSÃO FINAL COM mTLS
+# download.py - VERSÃO CORRIGIDA E COMPLETA
 import base64
 import gzip
 import time
 from pathlib import Path
-import ssl
+import requests
 from lxml import etree
 from signxml import XMLSigner, methods
 from config import CERT_PFX_PATH, CERT_PASSWORD, CNPJ
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
-from urllib3.util.ssl_ import create_urllib3_context
+
 # URLs oficiais do serviço NFeDistribuicaoDFe (produção)
 URLS_DFE = {
     "AC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
@@ -49,97 +46,68 @@ UF_PARA_CODIGO = {
     "52": "GO", "53": "DF"
 }
 
-
 def detectar_uf_da_chave(chave: str) -> str:
-    """Detecta a UF a partir dos primeiros 2 dígitos da chave de acesso."""
     codigo = chave[:2]
     if codigo not in UF_PARA_CODIGO:
         raise ValueError(f"Código de UF inválido na chave: {codigo}")
     return UF_PARA_CODIGO[codigo]
 
-
 def converter_pfx_para_pem(pfx_path: Path, senha: str):
-    """
-    Converte certificado PFX para formato PEM (cert + key).
-    Retorna (cert.pem, key.pem)
-    """
     import subprocess
-    
     cert_pem = pfx_path.with_suffix(".cert.pem")
     key_pem = pfx_path.with_suffix(".key.pem")
-    
-    # Exportar certificado
+
     subprocess.run([
         "openssl", "pkcs12", "-in", str(pfx_path),
         "-clcerts", "-nokeys", "-out", str(cert_pem),
         "-passin", f"pass:{senha}"
     ], check=True, capture_output=True, text=True)
-    
-    # Exportar chave privada
+
     subprocess.run([
         "openssl", "pkcs12", "-in", str(pfx_path),
         "-nocerts", "-nodes", "-out", str(key_pem),
         "-passin", f"pass:{senha}"
     ], check=True, capture_output=True, text=True)
-    
+
+    # --- CORREÇÃO: garantir só 1 certificado ---
+    with open(cert_pem, "r") as f:
+        content = f.read()
+    if content.count("-----BEGIN CERTIFICATE-----") > 1:
+        first_cert = "-----BEGIN CERTIFICATE-----" + \
+                     content.split("-----BEGIN CERTIFICATE-----")[1].split("-----END CERTIFICATE-----")[0] + \
+                     "-----END CERTIFICATE-----\n"
+        with open(cert_pem, "w") as f:
+            f.write(first_cert)
+
     return cert_pem, key_pem
 
-
 def criar_sessao_sefaz(cert_pem: Path, key_pem: Path):
-    """
-    Cria uma sessão requests com mTLS (mutual TLS) configurado.
-    CRÍTICO: O servidor SEFAZ requer certificado cliente durante handshake!
-    """
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
     session = requests.Session()
-    
-    # IMPORTANTE: Configura certificado cliente para mTLS
-    # O servidor SEFAZ pede certificado durante TLS handshake (Request CERT)
     session.cert = (str(cert_pem), str(key_pem))
-    
-    # Desabilita verificação de certificado do servidor
-    # (SEFAZ usa certificados ICP-Brasil que podem não estar no truststore)
     session.verify = False
-    
     return session
 
-
 def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session: requests.Session):
-    """
-    Faz a requisição SOAP para o serviço NFeDistribuicaoDFe.
-    Retorna o XML da nota fiscal ou None se não encontrado.
-    """
     url = URLS_DFE.get(uf)
     if not url:
         raise ValueError(f"URL não configurada para UF: {uf}")
 
-    # Monta o envelope SOAP
-    soap_body = f"""
-    <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe">
-        <soapenv:Header/>
-        <soapenv:Body>
-            <ns:distDFeInt>
-                <distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">
-                    <tpAmb>1</tpAmb>
-                    <cUFAutor>{chave[:2]}</cUFAutor>
-                    <CNPJ>{CNPJ}</CNPJ>
-                    <consChNFe>
-                        <chNFe>{chave}</chNFe>
-                    </consChNFe>
-                </distDFeInt>
-            </ns:distDFeInt>
-        </soapenv:Body>
-    </soapenv:Envelope>
-    """.strip()
+    # Monta APENAS o distDFeInt (sem envelope SOAP ainda)
+    dist_dfe_content = f"""
+    <distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">
+        <tpAmb>1</tpAmb>
+        <cUFAutor>{chave[:2]}</cUFAutor>
+        <CNPJ>{CNPJ}</CNPJ>
+        <consChNFe>
+            <chNFe>{chave}</chNFe>
+        </consChNFe>
+    </distDFeInt>
+    """
 
-    # Parse e assina o XML
-    root = etree.fromstring(soap_body.encode("utf-8"))
-    ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
-    dist_dfe_int = root.xpath("//ns:distDFeInt", namespaces=ns)[0]
-    
-    # Assina digitalmente
+    # Parse e assina
+    root = etree.fromstring(dist_dfe_content.strip().encode("utf-8"))
     with open(cert_pem, "rb") as f_cert, open(key_pem, "rb") as f_key:
         signer = XMLSigner(
             method=methods.enveloped,
@@ -147,65 +115,59 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
             digest_algorithm="sha1",
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
         )
-        signed_dist = signer.sign(dist_dfe_int, key=f_key.read(), cert=f_cert.read())
-    
-    parent = dist_dfe_int.getparent()
-    parent.replace(dist_dfe_int, signed_dist)
+        signed_root = signer.sign(root, key=f_key.read(), cert=f_cert.read())
 
-    # Headers SOAP
+    # Agora monta o envelope SOAP com o distDFeInt ASSINADO
+    signed_xml_str = etree.tostring(signed_root, encoding="unicode")
+    soap_envelope = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe">
+        <soapenv:Header/>
+        <soapenv:Body>
+            <ns:distDFeInt>
+                {signed_xml_str}
+            </ns:distDFeInt>
+        </soapenv:Body>
+    </soapenv:Envelope>"""
+
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
     }
-    print(f"\n📤 XML ENVIADO:")
-    print(etree.tostring(root, pretty_print=True, encoding='unicode')[:1000])
 
-    # Faz a requisição
-    # A sessão já tem cert=(cert_pem, key_pem) configurado
-    response = session.post(
-        url,
-        data=etree.tostring(root),
-        headers=headers,
-        timeout=30
-    )
+    # Debug: salva XML enviado
+    with open("ultimo_enviado.xml", "w", encoding="utf-8") as f:
+        f.write(soap_envelope)
 
-# ADICIONE AQUI:
+    response = session.post(url, data=soap_envelope, headers=headers, timeout=30)
     print(f"\n🔍 DEBUG:")
     print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")  # Pr
+    print(f"Response preview: {response.text[:400]}")
+
     response.raise_for_status()
 
-    # Parse da resposta
+    # Parse resposta
+    ns = {"ns": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"}
     root_resp = etree.fromstring(response.content)
     lote_zip = root_resp.xpath("//ns:loteDistDFeZip", namespaces=ns)
-    
+
     if not lote_zip or not lote_zip[0].text:
-        # Verifica se há mensagem de erro
         cstat = root_resp.xpath("//ns:cStat", namespaces=ns)
         xmotivo = root_resp.xpath("//ns:xMotivo", namespaces=ns)
-        
         if cstat and xmotivo:
-            status = cstat[0].text
-            motivo = xmotivo[0].text
-            print(f"   ℹ️  Status {status}: {motivo}")
-        
+            print(f"   ℹ️  Status {cstat[0].text}: {xmotivo[0].text}")
         return None
 
-    # Descompacta o XML
     try:
         dados_zip = base64.b64decode(lote_zip[0].text)
         xml_bytes = gzip.decompress(dados_zip)
         return xml_bytes.decode("utf-8")
     except Exception as e:
-        print(f"   ⚠️  Erro ao descomprimir XML: {e}")
+        print(f"   ⚠️  Erro ao descomprimir: {e}")
         return None
 
-
 def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem: Path, session: requests.Session):
-    """Baixa o XML de uma NFe pela chave de acesso."""
     uf = detectar_uf_da_chave(chave)
     print(f"📥 Consultando chave {chave} (UF={uf})...")
-
     try:
         xml_nota = distribuicao_dfe(chave, uf, cert_pem, key_pem, session)
         if xml_nota:
@@ -222,56 +184,36 @@ def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem:
         traceback.print_exc()
         return False
 
-
 def baixar_em_massa(chaves: list[str], pasta_saida: Path):
-    """
-    Baixa XMLs de múltiplas chaves de acesso.
-    Exibe estatísticas ao final.
-    """
     pasta_saida.mkdir(parents=True, exist_ok=True)
-    
-    # Converte certificado uma única vez
     print("🔐 Convertendo certificado...")
     cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
-    
-    # Cria sessão com mTLS (certificado cliente)
     print("🔗 Criando sessão com autenticação mTLS...")
     session = criar_sessao_sefaz(cert_pem, key_pem)
-    
-    # Estatísticas
+
     sucesso = 0
-    falhas = 0
     nao_encontrados = 0
+    falhas = 0
 
     try:
         for i, chave in enumerate(chaves, start=1):
             print(f"\n[{i}/{len(chaves)}]")
-            
-            # Valida chave
             if len(chave) != 44 or not chave.isdigit():
                 print(f"⚠️  Chave inválida ignorada: {chave}")
                 falhas += 1
                 continue
-            
-            # Tenta baixar
             resultado = baixar_xml_por_chave(chave, pasta_saida, cert_pem, key_pem, session)
-            
             if resultado:
                 sucesso += 1
             else:
                 nao_encontrados += 1
-            
-            # Delay entre requisições (respeita rate limit)
             if i < len(chaves):
                 time.sleep(1.5)
-    
     finally:
-        # Limpeza de arquivos temporários
         print("\n🧹 Limpando arquivos temporários...")
         cert_pem.unlink(missing_ok=True)
         key_pem.unlink(missing_ok=True)
-    
-    # Exibe estatísticas
+
     print("\n" + "="*60)
     print("📊 RESUMO DA EXECUÇÃO")
     print("="*60)
