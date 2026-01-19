@@ -1,14 +1,17 @@
-# download.py - VERSÃO CORRIGIDA E COMPLETA
+# download.py - VERSÃO CORRIGIDA, MODULAR E ATUALIZADA
 import base64
 import gzip
 import time
 from pathlib import Path
+
 import requests
 from lxml import etree  # type: ignore
-from signxml import XMLSigner, methods # type: ignore
-from sistema_de_download_nf_ce.config import CERT_PFX_PATH, CERT_PASSWORD, CNPJ
+from signxml import XMLSigner, methods  # type: ignore
 
-# URLs oficiais do serviço NFeDistribuicaoDFe (produção)
+from sistema_de_download_nf_ce.config import CERT_PASSWORD, CERT_PFX_PATH, CNPJ
+from sistema_de_download_nf_ce.convert_certificado import converter_pfx_para_pem
+
+# URLs oficiais do serviço NFeDistribuicaoDFe (produção) — SEM ESPAÇOS NO FINAL!
 URLS_DFE = {
     "AC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "AL": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
@@ -34,17 +37,39 @@ URLS_DFE = {
     "SC": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "SE": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
     "SP": "https://nfe.fazenda.sp.gov.br/ws/nfedistribuicaodfe.asmx",
-    "TO": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
+    "TO": "https://dfe-svrs-1.sefazvirtual.rs.gov.br/ws/nfe/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
 }
 
 UF_PARA_CODIGO = {
-    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA",
-    "16": "AP", "17": "TO", "21": "MA", "22": "PI", "23": "CE",
-    "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE",
-    "29": "BA", "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
-    "41": "PR", "42": "SC", "43": "RS", "50": "MS", "51": "MT",
-    "52": "GO", "53": "DF"
+    "11": "RO",
+    "12": "AC",
+    "13": "AM",
+    "14": "RR",
+    "15": "PA",
+    "16": "AP",
+    "17": "TO",
+    "21": "MA",
+    "22": "PI",
+    "23": "CE",
+    "24": "RN",
+    "25": "PB",
+    "26": "PE",
+    "27": "AL",
+    "28": "SE",
+    "29": "BA",
+    "31": "MG",
+    "32": "ES",
+    "33": "RJ",
+    "35": "SP",
+    "41": "PR",
+    "42": "SC",
+    "43": "RS",
+    "50": "MS",
+    "51": "MT",
+    "52": "GO",
+    "53": "DF",
 }
+
 
 def detectar_uf_da_chave(chave: str) -> str:
     codigo = chave[:2]
@@ -52,42 +77,16 @@ def detectar_uf_da_chave(chave: str) -> str:
         raise ValueError(f"Código de UF inválido na chave: {codigo}")
     return UF_PARA_CODIGO[codigo]
 
-def converter_pfx_para_pem(pfx_path: Path, senha: str):
-    import subprocess
-    cert_pem = pfx_path.with_suffix(".cert.pem")
-    key_pem = pfx_path.with_suffix(".key.pem")
-
-    subprocess.run([
-        "openssl", "pkcs12", "-in", str(pfx_path),
-        "-clcerts", "-nokeys", "-out", str(cert_pem),
-        "-passin", f"pass:{senha}"
-    ], check=True, capture_output=True, text=True)
-
-    subprocess.run([
-        "openssl", "pkcs12", "-in", str(pfx_path),
-        "-nocerts", "-nodes", "-out", str(key_pem),
-        "-passin", f"pass:{senha}"
-    ], check=True, capture_output=True, text=True)
-
-    # --- CORREÇÃO: garantir só 1 certificado ---
-    with open(cert_pem, "r") as f:
-        content = f.read()
-    if content.count("-----BEGIN CERTIFICATE-----") > 1:
-        first_cert = "-----BEGIN CERTIFICATE-----" + \
-                     content.split("-----BEGIN CERTIFICATE-----")[1].split("-----END CERTIFICATE-----")[0] + \
-                     "-----END CERTIFICATE-----\n"
-        with open(cert_pem, "w") as f:
-            f.write(first_cert)
-
-    return cert_pem, key_pem
 
 def criar_sessao_sefaz(cert_pem: Path, key_pem: Path):
     import urllib3
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     session = requests.Session()
     session.cert = (str(cert_pem), str(key_pem))
     session.verify = False
     return session
+
 
 def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session: requests.Session):
     url = URLS_DFE.get(uf)
@@ -113,9 +112,9 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
             method=methods.enveloped,
             signature_algorithm="rsa-sha1",
             digest_algorithm="sha1",
-            c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+            c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
         )
-        signed_root = signer.sign(root, key=f_key.read(), cert=f_cert.read()) # type: ignore
+        signed_root = signer.sign(root, key=f_key.read(), cert=f_cert.read())  # type: ignore
 
     # Agora monta o envelope SOAP com o distDFeInt ASSINADO
     signed_xml_str = etree.tostring(signed_root, encoding="unicode")
@@ -131,7 +130,7 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
 
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
-        "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse"
+        "SOAPAction": "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse",
     }
 
     # Debug: salva XML enviado
@@ -165,6 +164,7 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
         print(f"   ⚠️  Erro ao descomprimir: {e}")
         return None
 
+
 def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem: Path, session: requests.Session):
     uf = detectar_uf_da_chave(chave)
     print(f"📥 Consultando chave {chave} (UF={uf})...")
@@ -181,13 +181,15 @@ def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem:
     except Exception as e:
         print(f"❌ Erro na chave {chave}: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     pasta_saida.mkdir(parents=True, exist_ok=True)
     print("🔐 Convertendo certificado...")
-    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD) # type: ignore
+    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
     print("🔗 Criando sessão com autenticação mTLS...")
     session = criar_sessao_sefaz(cert_pem, key_pem)
 
@@ -214,11 +216,11 @@ def baixar_em_massa(chaves: list[str], pasta_saida: Path):
         cert_pem.unlink(missing_ok=True)
         key_pem.unlink(missing_ok=True)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("📊 RESUMO DA EXECUÇÃO")
-    print("="*60)
+    print("=" * 60)
     print(f"✅ Sucesso: {sucesso}")
     print(f"⚠️  Não encontrados: {nao_encontrados}")
     print(f"❌ Falhas: {falhas}")
     print(f"📁 Total processado: {len(chaves)}")
-    print("="*60)
+    print("=" * 60)
