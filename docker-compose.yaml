@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  nfe-downloader:
+    build: .
+    container_name: sistema-download-nfe
+    volumes:
+      # Mapear o certificado
+      - ./certificate:/app/certificate:ro
+      # Mapear a pasta de downloads
+      - ./downloads:/app/downloads
+      # Mapear o arquivo de chaves
+      - ./chaves.txt:/app/chaves.txt:ro
+      # Mapear arquivo .env se existir
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Descomente a linha abaixo se quiser manter o container rodando
+    # command: tail -f /dev/null
