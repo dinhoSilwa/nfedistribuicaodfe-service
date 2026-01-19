@@ -189,7 +189,7 @@ def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem:
 def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     pasta_saida.mkdir(parents=True, exist_ok=True)
     print("🔐 Convertendo certificado...")
-    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
+    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD) # type: ignore
     print("🔗 Criando sessão com autenticação mTLS...")
     session = criar_sessao_sefaz(cert_pem, key_pem)
 
