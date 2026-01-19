@@ -109,7 +109,6 @@ arquivos_temporarios/
 # ============================================
 
 # Configurações com credenciais
-config.py
 secrets.py
 settings_local.py
 *.key
@@ -124,7 +123,6 @@ certificate/certificado.pfx
 # XMLs sensíveis
 req.xml
 *.xml  # Cuidado: pode ser muito genérico
-*.config
 
 # ============================================
 # IDEs e EDITORES
