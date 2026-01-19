@@ -256,3 +256,4 @@ debug/
 # Cache de diretórios
 .directory
 */.directory
+__pycache__/
