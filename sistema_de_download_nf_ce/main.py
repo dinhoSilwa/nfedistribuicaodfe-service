@@ -1,7 +1,5 @@
-# main.py
-from pathlib import Path
-from config import ARQUIVO_CHAVES, PASTA_XMLS
-from download import baixar_em_massa
+from sistema_de_download_nf_ce.config import ARQUIVO_CHAVES, PASTA_XMLS
+from sistema_de_download_nf_ce.download import baixar_em_massa
 
 def main():
     if not ARQUIVO_CHAVES.exists():

@@ -2,7 +2,7 @@
 import subprocess
 import sys
 from pathlib import Path
-from config import CERT_PFX_PATH, CERT_PASSWORD
+from sistema_de_download_nf_ce.config import CERT_PFX_PATH, CERT_PASSWORD
 
 def converter_pfx_para_pem(pfx_path: Path, senha: str) -> tuple[Path, Path]:
     """
@@ -52,4 +52,4 @@ def converter_pfx_para_pem(pfx_path: Path, senha: str) -> tuple[Path, Path]:
         sys.exit(1)
 
 if __name__ == "__main__":
-    converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
+    converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD) # type: ignore

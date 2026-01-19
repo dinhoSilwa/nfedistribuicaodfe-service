@@ -4,9 +4,9 @@ import gzip
 import time
 from pathlib import Path
 import requests
-from lxml import etree
-from signxml import XMLSigner, methods
-from config import CERT_PFX_PATH, CERT_PASSWORD, CNPJ
+from lxml import etree  # type: ignore
+from signxml import XMLSigner, methods # type: ignore
+from sistema_de_download_nf_ce.config import CERT_PFX_PATH, CERT_PASSWORD, CNPJ
 
 # URLs oficiais do serviço NFeDistribuicaoDFe (produção)
 URLS_DFE = {
@@ -115,7 +115,7 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
             digest_algorithm="sha1",
             c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
         )
-        signed_root = signer.sign(root, key=f_key.read(), cert=f_cert.read())
+        signed_root = signer.sign(root, key=f_key.read(), cert=f_cert.read()) # type: ignore
 
     # Agora monta o envelope SOAP com o distDFeInt ASSINADO
     signed_xml_str = etree.tostring(signed_root, encoding="unicode")
@@ -139,7 +139,7 @@ def distribuicao_dfe(chave: str, uf: str, cert_pem: Path, key_pem: Path, session
         f.write(soap_envelope)
 
     response = session.post(url, data=soap_envelope, headers=headers, timeout=30)
-    print(f"\n🔍 DEBUG:")
+    print("\n🔍 DEBUG:")
     print(f"Status: {response.status_code}")
     print(f"Response preview: {response.text[:400]}")
 
@@ -187,7 +187,7 @@ def baixar_xml_por_chave(chave: str, pasta_saida: Path, cert_pem: Path, key_pem:
 def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     pasta_saida.mkdir(parents=True, exist_ok=True)
     print("🔐 Convertendo certificado...")
-    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD)
+    cert_pem, key_pem = converter_pfx_para_pem(CERT_PFX_PATH, CERT_PASSWORD) # type: ignore
     print("🔗 Criando sessão com autenticação mTLS...")
     session = criar_sessao_sefaz(cert_pem, key_pem)
 
