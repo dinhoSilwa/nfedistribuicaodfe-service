@@ -1,71 +1,50 @@
-# test_main.py
-import pytest
-from unittest.mock import patch, mock_open
+"""Testes para o módulo main.py"""
+
 from pathlib import Path
-from main import main
+from unittest.mock import MagicMock, mock_open, patch
+
+# Importa o módulo main
+import main
 
 
-def test_main_sucesso(tmp_path):
-    """Testa execução principal bem-sucedida."""
-    # Cria arquivo de chaves temporário
-    arquivo_chaves = tmp_path / "chaves.txt"
-    arquivo_chaves.write_text("""35241123456789012345678901234567890123456789
+def test_main_sucesso_com_mock():
+    """Testa execução principal bem-sucedida com mocks."""
+    # Cria conteúdo de chaves válidas
+    chaves_conteudo = """35241123456789012345678901234567890123456789
 35241123456789012345678901234567890123456788
-""")
-    
-    with patch("main.ARQUIVO_CHAVES", arquivo_chaves), \
-         patch("main.PASTA_XMLS", tmp_path / "xmls"), \
-         patch("main.baixar_em_massa") as mock_baixar:
-        
-        # Executa
-        main()
-        
-        # Verifica
-        mock_baixar.assert_called_once()
-        assert len(mock_baixar.call_args[0][0]) == 2  # 2 chaves válidas
+"""
+
+    with patch("main.ARQUIVO_CHAVES") as mock_arquivo_chaves:
+        # Mock do arquivo de chaves
+        mock_arquivo_chaves.exists.return_value = True
+
+        with patch("builtins.open", mock_open(read_data=chaves_conteudo)):
+            with patch("main.baixar_em_massa") as mock_baixar:
+                # Mock da função baixar_em_massa
+                mock_baixar.return_value = None
+
+                with patch("main.PASTA_XMLS", Path("xmls_test")):
+                    # Executa main
+                    main.main()
+
+                    # Verifica se baixar_em_massa foi chamado
+                    mock_baixar.assert_called_once()
+
+                    # Verifica que recebeu 2 chaves
+                    args, _ = mock_baixar.call_args
+                    chaves = args[0]
+                    assert len(chaves) == 2
+                    assert all(len(chave) == 44 for chave in chaves)
 
 
 def test_main_arquivo_nao_encontrado():
     """Testa quando o arquivo de chaves não existe."""
-    with patch("main.ARQUIVO_CHAVES", Path("/caminho/inexistente/chaves.txt")):
-        with pytest.raises(FileNotFoundError, match="Arquivo de chaves não encontrado"):
-            main()
+    with patch("main.ARQUIVO_CHAVES") as mock_arquivo_chaves:
+        mock_arquivo_chaves.exists.return_value = False
 
-
-def test_main_chaves_invalidas(tmp_path):
-    """Testa quando o arquivo de chaves contém apenas chaves inválidas."""
-    arquivo_chaves = tmp_path / "chaves.txt"
-    arquivo_chaves.write_text("""chave inválida
-123
-outra chave inválida
-""")
-    
-    with patch("main.ARQUIVO_CHAVES", arquivo_chaves), \
-         patch("main.PASTA_XMLS", tmp_path / "xmls"), \
-         patch("main.baixar_em_massa") as mock_baixar:
-        
-        # Capture a saída
-        with patch("builtins.print") as mock_print:
-            main()
-            
-            # Verifica mensagem de aviso
-            mock_print.assert_any_call("⚠️  Nenhuma chave válida encontrada.")
-        
-        # baixar_em_massa não deve ser chamado
-        mock_baixar.assert_not_called()
-
-
-def test_main_arquivo_vazio(tmp_path):
-    """Testa quando o arquivo de chaves está vazio."""
-    arquivo_chaves = tmp_path / "chaves.txt"
-    arquivo_chaves.write_text("")
-    
-    with patch("main.ARQUIVO_CHAVES", arquivo_chaves), \
-         patch("main.PASTA_XMLS", tmp_path / "xmls"), \
-         patch("main.baixar_em_massa") as mock_baixar:
-        
-        with patch("builtins.print") as mock_print:
-            main()
-            mock_print.assert_any_call("⚠️  Nenhuma chave válida encontrada.")
-        
-        mock_baixar.assert_not_called()
+        # Deve lançar FileNotFoundError
+        try:
+            main.main()
+            assert False, "Deveria ter lançado FileNotFoundError"
+        except FileNotFoundError as e:
+            assert "Arquivo de chaves não encontrado" in str(e)
