@@ -224,3 +224,5 @@ def baixar_em_massa(chaves: list[str], pasta_saida: Path):
     print(f"❌ Falhas: {falhas}")
     print(f"📁 Total processado: {len(chaves)}")
     print("=" * 60)
+
+
