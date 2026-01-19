@@ -1,34 +1,44 @@
+# sistema_de_download_nf_ce/main.py
 import time
 from pathlib import Path
+from .config import (
+    CNPJ_INTERESSADO,
+    CERT_PFX_PATH,
+    CERT_PASSWORD,
+    AMBIENTE,
+    TIMEOUT,
+    PASTA_XML
+)
+from .distribuicao.soap import distribuicao_dfe_por_chave
+from .distribuicao.utils import salvar_xml
 
-from sistema_de_download_nf_ce import config
-from sistema_de_download_nf_ce.distribuicao import distribuicao_dfe_por_chave
-from sistema_de_download_nf_ce.distribuicao.utils import salvar_xml
-
-# Carrega chaves do arquivo
-with open(config.ARQUIVO_CHAVES) as f:
-    CHAVES_DESEJADAS = [linha.strip() for linha in f if linha.strip().isdigit() and len(linha.strip()) == 44]
-
+CHAVES_DESEJADAS = [
+    "23250834683891000140650220000200441904557410",
+    # ...
+]
 
 def main():
     print(f"📥 Consultando {len(CHAVES_DESEJADAS)} chaves...")
     for i, chave in enumerate(CHAVES_DESEJADAS, 1):
         print(f"[{i}/{len(CHAVES_DESEJADAS)}] {chave}")
+        
         xml_bytes = distribuicao_dfe_por_chave(
             chave=chave,
-            cnpj_interessado=config.CNPJ_INTERESSADO,
-            cert_pfx=str(config.CERT_PFX_PATH),
-            cert_password=config.CERT_PASSWORD,
-            ambiente=config.AMBIENTE,
-            timeout=config.TIMEOUT,
+            cnpj_interessado=CNPJ_INTERESSADO,
+            cert_pfx=str(CERT_PFX_PATH),
+            cert_password=CERT_PASSWORD,
+            ambiente=AMBIENTE,
+            timeout=TIMEOUT
         )
+        
         if xml_bytes:
-            salvar_xml(chave, xml_bytes, config.PASTA_XML)
-            print(f"✅ Salvo: {chave}.xml")
+            caminho = salvar_xml(chave, xml_bytes, PASTA_XML)
+            print(f"✅ Salvo: {caminho.name}")
         else:
-            print(f"⚠️ Falha ou não encontrado: {chave}")
-        time.sleep(1.5)
-
+            print(f"⚠️ Não encontrado: {chave}")
+        
+        if i < len(CHAVES_DESEJADAS):
+            time.sleep(6.0)  # respeita limite da SEFAZ
 
 if __name__ == "__main__":
     main()

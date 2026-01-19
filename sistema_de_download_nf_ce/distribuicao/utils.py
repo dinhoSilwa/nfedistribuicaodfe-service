@@ -1,6 +1,5 @@
 # distribuicao/utils.py
 from pathlib import Path
-
 def detectar_uf_da_chave(chave: str) -> str:
     if len(chave) != 44 or not chave.isdigit():
         raise ValueError(f"Chave inválida: {chave}")
