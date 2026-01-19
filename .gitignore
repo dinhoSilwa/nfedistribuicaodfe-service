@@ -119,6 +119,7 @@ settings_local.py
 chaves.txt
 credentials.json
 service_account.json
+certificate/certificado.pfx
 
 # XMLs sensíveis
 req.xml
